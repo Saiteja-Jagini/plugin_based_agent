@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.lumora-agent/
+*.sqlite*
+*.tgz
+coverage/
+.env
+.env.*
+!.env.example
+test-results/

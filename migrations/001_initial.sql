@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, policy TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS principals(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), user_id TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','observer','agent')), token_hash TEXT NOT NULL UNIQUE, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions(project_id TEXT NOT NULL REFERENCES projects(id), id TEXT NOT NULL, user_id TEXT NOT NULL, started_at TEXT NOT NULL, last_seen TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(project_id,id));
+CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, id TEXT NOT NULL, session_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(project_id,id), FOREIGN KEY(project_id,session_id) REFERENCES sessions(project_id,id));
+CREATE INDEX IF NOT EXISTS events_filter ON events(project_id,kind,seq);
+CREATE INDEX IF NOT EXISTS events_session ON events(project_id,session_id,seq);
+CREATE TABLE IF NOT EXISTS audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id), payload TEXT NOT NULL, previous_hash TEXT NOT NULL, hash TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS audit_project ON audit(project_id,seq);
+CREATE TABLE IF NOT EXISTS releases(project_id TEXT NOT NULL REFERENCES projects(id), version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(project_id,version));
+CREATE TABLE IF NOT EXISTS active_releases(project_id TEXT PRIMARY KEY REFERENCES projects(id), version TEXT NOT NULL, FOREIGN KEY(project_id,version) REFERENCES releases(project_id,version));
