@@ -1,6 +1,6 @@
 {
   "name": "lumora-agent-governance",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Codex governance, prompt capture and testing skills for any local project connected through Lumora",
   "type": "module",
   "private": true,
@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test:ui": "node --test tests/browser.spec.ts",
     "verify": "npm run typecheck && npm test",
-    "pack:plugin": "node src/cli.ts package --out dist/lumora-governance-0.2.0",
+    "pack:plugin": "node src/cli.ts package --out dist/lumora-governance-0.4.0",
     "build": "node src/cli.ts build",
     "prepack": "npm run build",
     "demo": "node src/cli.ts demo"
@@ -37,6 +37,7 @@
     "docs/VALIDATION.md",
     "docs/screenshots",
     "docs/INSTALL_ONCE.md",
+    "docs/LOCAL_PROJECT_WORKFLOW.md",
     "docs/PROJECT_RULES.md"
   ]
 }

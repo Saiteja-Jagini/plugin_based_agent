@@ -41,6 +41,9 @@ export class Outbox {
       try {
         await requestJson(`${config.serverUrl}/api/projects/${encodeURIComponent(config.projectId)}/events`,token,'POST',JSON.parse(String(row.payload)),Math.min(2000,Math.max(100,deadline-Date.now())));
         this.db.prepare('DELETE FROM queue WHERE id=? AND identity=?').run(row.id,identity);sent++;
+        const delivered=JSON.parse(String(row.payload));
+        this.set('capture:lastDelivered',{at:new Date().toISOString(),kind:delivered.kind,eventId:delivered.id});
+        if(delivered.kind==='UserPromptSubmit')this.set('capture:lastPromptDelivered',{at:new Date().toISOString(),eventId:delivered.id});
       }catch(e) {
         const attempts=Number(row.attempts)+1;
         const error=e instanceof HttpError?`HTTP ${e.status}`:'Network unavailable';
@@ -49,5 +52,11 @@ export class Outbox {
       }
     }
     return {sent,failed,...this.status()};
+  }
+  diagnostics() {
+    return {lastInvocation:this.get('capture:lastInvocation')??null,lastPromptInvocation:this.get('capture:lastPromptInvocation')??null,
+      lastCaptured:this.get('capture:lastCaptured')??null,lastPromptCaptured:this.get('capture:lastPromptCaptured')??null,
+      lastDelivered:this.get('capture:lastDelivered')??null,lastPromptDelivered:this.get('capture:lastPromptDelivered')??null,
+      errors:this.db.prepare('SELECT last_error AS error,count(*) AS pending FROM queue WHERE last_error IS NOT NULL GROUP BY last_error').all()};
   }
 }

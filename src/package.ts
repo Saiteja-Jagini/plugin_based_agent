@@ -6,7 +6,7 @@ import { atomicWrite, readJson, safePath } from './util.ts';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const marker='lumora-governance';
-const version='0.2.0';
+const version='0.4.0';
 export function hookConfig(command:string,commandWindows:string) {
   return {description:'Governance for connected local projects',hooks:Object.fromEntries(events.map(event=>[event,[{hooks:[{type:'command',command,commandWindows,timeout:event==='SessionEnd'?3:12,statusMessage:'Connected project governance'}]}]]))};
 }

@@ -15,6 +15,7 @@ import { handleHook, saveConnection } from '../src/hook.ts';
 import { makeRelease } from '../src/skills.ts';
 import { LumoraClient } from '../src/lumora.ts';
 import { packagePlugin } from '../src/package.ts';
+import { diagnose } from '../src/diagnostics.ts';
 
 const temp=()=>mkdtempSync(join(tmpdir(),'lumora-integration-'));
 async function service(){const store=new Store(':memory:'),admin=store.bootstrap('p','Lumora','admin');store.publish(admin.principal,makeRelease('skills'));const server=createApp(store);server.listen(0,'127.0.0.1');await once(server,'listening');const url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;return {store,admin,server,url,close:async()=>{server.close();await once(server,'close');store.close();}};}
@@ -58,6 +59,10 @@ test('Codex session refresh, prompt capture, denial and bounded stop execute end
     const start=await handleHook({...base,hook_event_name:'SessionStart'},env);assert.ok(JSON.stringify(start).includes('Skill release'));
     assert.ok(existsSync(join(root,'.agents','skills','project-testing','SKILL.md')));
     await handleHook({...base,hook_event_name:'UserPromptSubmit',prompt:'api_key=supersecret Review Lumora'},env);
+    const health=await diagnose(root,env);assert.equal(health.api,'authenticated');
+    assert.equal(health.capture?.lastPromptInvocation.sessionId,'codex-session');
+    assert.equal(health.capture?.lastPromptCaptured.eventId,health.capture?.lastPromptDelivered.eventId);
+    assert.ok(health.latestServerPrompt);assert.ok(!JSON.stringify(health).includes(s.admin.token));
     const denied=await handleHook({...base,hook_event_name:'PreToolUse',tool_name:'Bash',tool_input:{command:'pnpm db:reset'}},env);
     assert.ok(JSON.stringify(denied).includes('permissionDecision":"deny'));
     const stop=await handleHook({...base,hook_event_name:'Stop'},env);assert.equal('decision' in stop?stop.decision:null,'block');
@@ -113,4 +118,55 @@ test('missing connection is inactive, while missing connected credentials cannot
   assert.deepEqual(await handleHook(hook,{}),{});
   saveConnection(root,connectionSchema.parse({version:1,projectId:'p',serverUrl:'http://localhost:4318'}));
   await assert.rejects(handleHook(hook,{}),/Missing LUMORA_AGENT_TOKEN/);
+  await assert.rejects(handleHook({...hook,hook_event_name:'UserPromptSubmit',prompt:'Not captured'},{}),/Missing LUMORA_AGENT_TOKEN/);
+  const report=await diagnose(root,{});assert.equal(report.credential,'missing in this process');
+  assert.equal(report.capture?.lastPromptInvocation.credential,'missing');assert.equal(report.capture?.lastPromptCaptured,null);
+  assert.equal((await diagnose(temp(),{})).connected,false);
+});
+
+test('each prompt points to current local skill content after edits, including after refresh',async()=>{
+  const s=await service(),root=temp();
+  try {
+    saveConnection(root,connectionSchema.parse({version:1,projectId:'p',serverUrl:s.url}));
+    const env={LUMORA_AGENT_TOKEN:s.admin.token},base={cwd:root,session_id:'local-skills'};
+    await handleHook({...base,hook_event_name:'SessionStart'},env);
+    const first=JSON.stringify(await handleHook({...base,hook_event_name:'UserPromptSubmit',prompt:'Write tests'},env));
+    const path=join(root,'.agents/skills/project-testing/SKILL.md');
+    const custom=readFileSync(path,'utf8')+'\nTest the expired-session case using local fixtures.';writeFileSync(path,custom);
+    await handleHook({...base,hook_event_name:'SessionStart'},env);
+    const next=JSON.stringify(await handleHook({...base,hook_event_name:'UserPromptSubmit',prompt:'Use my edited skill'},env));
+    assert.notEqual(first,next);assert.ok(next.includes('local override'));assert.ok(next.includes('.agents/skills/project-testing/SKILL.md'));
+    assert.equal(readFileSync(path,'utf8'),custom);
+  }finally{await s.close();}
+});
+
+test('packaged prompt hook delivers authenticated redacted text to the log API',async()=>{
+  const s=await service(),root=temp(),dest=join(temp(),'plugin');
+  try {
+    await packagePlugin(dest);saveConnection(root,connectionSchema.parse({version:1,projectId:'p',serverUrl:s.url}));
+    const config=JSON.parse(readFileSync(join(dest,'hooks/hooks.json'),'utf8')).hooks.UserPromptSubmit[0].hooks[0];
+    const proc=spawn(process.platform==='win32'?config.commandWindows:config.command,{shell:true,env:{...process.env,PLUGIN_ROOT:dest,LUMORA_AGENT_TOKEN:s.admin.token},stdio:['pipe','pipe','pipe']});
+    let stdout='',stderr='';proc.stdout.on('data',x=>stdout+=x);proc.stderr.on('data',x=>stderr+=x);
+    proc.stdin.end(JSON.stringify({hook_event_name:'UserPromptSubmit',session_id:'packaged-capture',cwd:root,prompt:'Capture regression password=hidden-value'}));
+    const [code]=await once(proc,'close');assert.equal(code,0,stderr);assert.ok(!stdout.includes('failed'));
+    const page=await requestJson(`${s.url}/api/projects/p/events?kind=UserPromptSubmit`,s.admin.token);
+    assert.equal(page.items.length,1);assert.ok(page.items[0].prompt.includes('Capture regression'));assert.ok(!page.items[0].prompt.includes('hidden-value'));
+  }finally{await s.close();}
+});
+
+test('connect installs editable repository skills and diagnostics identify identity problems',async()=>{
+  const s=await service(),root=temp();
+  try {
+    const proc=spawn(process.execPath,['src/cli.ts','connect','--root',root,'--project','p','--server',s.url],{env:{...process.env,LUMORA_AGENT_TOKEN:s.admin.token},stdio:['ignore','pipe','pipe']});
+    let stdout='',stderr='';proc.stdout.on('data',x=>stdout+=x);proc.stderr.on('data',x=>stderr+=x);
+    const [code]=await once(proc,'close');assert.equal(code,0,stderr);assert.equal(JSON.parse(stdout).skills.skills,3);
+    assert.ok(existsSync(join(root,'.agents/skills/project-testing/SKILL.md')));
+    const observer=s.store.transaction(()=>s.store.issue('p',{userId:'observer',name:'Observer',role:'observer'}));
+    const report=await diagnose(root,{LUMORA_AGENT_TOKEN:observer.token});
+    assert.equal(report.api,'authenticated');assert.ok(report.actions.some(a=>a.includes('only read')));assert.equal(report.capture,null);
+    s.store.revoke(s.admin.principal,observer.principal.id);
+    assert.equal((await diagnose(root,{LUMORA_AGENT_TOKEN:observer.token})).api,'HTTP 401');
+    const other=s.store.bootstrap('other','Other','bob');
+    assert.equal((await diagnose(root,{LUMORA_AGENT_TOKEN:other.token})).api,'wrong project credential');
+  }finally{await s.close();}
 });

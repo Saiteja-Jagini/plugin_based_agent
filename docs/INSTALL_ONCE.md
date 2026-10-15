@@ -1,10 +1,12 @@
 # Install once, connect each repository
 
+See [Local project workflow](LOCAL_PROJECT_WORKFLOW.md) for the complete Coznt example, local skill editing and prompt-log diagnostics.
+
 Lumora is the platform. This plugin works with any connected local repository. The stable package ID remains `lumora-governance` for upgrade compatibility; the skills are `project-governance`, `project-review`, and `project-testing`.
 
 ## Install or update the local package
 
-The catalog at `dist/.agents/plugins/marketplace.json` points to `dist/lumora-governance-0.2.0`. Keep this directory in place.
+The catalog at `dist/.agents/plugins/marketplace.json` points to `dist/lumora-governance-0.4.0`. Keep this directory in place.
 
 ```powershell
 codex.cmd plugin marketplace add "D:\Downloads\plugin_based_agent\dist"
@@ -40,7 +42,7 @@ node src/cli.ts connect --root "D:\Projects\weather-api" --project weather-api -
 node src/cli.ts sync --root "D:\Projects\weather-api"
 node src/cli.ts doctor --root "D:\Projects\weather-api"
 cd D:\Projects\weather-api
-codex.cmd
+codex.cmd --no-daemon
 ```
 
 Use the actual path and ID. Add `.lumora-agent/` to the repository's local ignore rules before capture. `connect` saves metadata, never credentials, and preserves existing connections. A new terminal needs its own environment credential; variables in the plugin development terminal are not automatically available elsewhere.
@@ -52,11 +54,11 @@ Repeat connection setup for each project, not plugin installation. Use distinct 
 Updating the plugin cache does not replace the platform's approved skill release. Existing projects may still publish the old Lumora-specific `1.0.0` release. With the project's administrator credential in its configured token environment variable:
 
 ```powershell
-node src/cli.ts publish --root "<connected repository>" --skills skills --version 2.0.0
+node src/cli.ts publish --root "<connected repository>" --skills skills --version 2.1.0
 node src/cli.ts sync --root "<connected repository>"
 ```
 
-New `init` projects seed generic skills at release `2.0.0`. Versions are immutable; choose a new version if that one already exists with different content. Sync removes only unchanged, receipt-owned old skill files. Modified or unowned files require review. A live Lumora skill source must also have its approved release updated on Lumora.
+New `init` projects seed generic skills at release `2.1.0`. Versions are immutable; choose a new version if that one already exists with different content. Sync removes only unchanged, receipt-owned old skill files. Modified or unowned files require review. A live Lumora skill source must also have its approved release updated on Lumora.
 
 Existing saved policies retain their settings, including `blockDatabasePush: true`. Administrators can change them in Policy controls or through the CLI. New projects default to no DB-push restriction and no project-specific source rules. See [Project rules](PROJECT_RULES.md).
 

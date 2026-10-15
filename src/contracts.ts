@@ -30,6 +30,11 @@ export const eventSchema = z.object({
 }).strict();
 export const skillSchema = z.object({slug, version: z.string().min(1).max(80), hash, content: z.string().min(1).max(200000)}).strict();
 export const releaseSchema = z.object({version: z.string().min(1).max(80), skills: z.array(skillSchema).max(100), hash}).strict();
+export const skillEditSchema=z.object({content:z.string().min(1).max(200000),expectedReleaseHash:hash.nullable(),create:z.boolean()}).strict();
+export const skillSyncFileSchema=z.object({path:z.string().regex(/^\.agents\/skills\/(?:project-|lumora-)[a-z0-9-]+\/SKILL\.md$/),localHash:hash.nullable(),remoteHash:hash.nullable(),status:z.enum(['synced','local','conflict','missing'])}).strict();
+export const skillSyncReportSchema=z.object({repositoryId:z.uuid(),name:z.string().min(1).max(200),version:z.string().min(1).max(80),releaseHash:hash,files:z.array(skillSyncFileSchema).max(200)}).strict();
+export const skillResolutionSchema=z.object({path:skillSyncFileSchema.shape.path,localHash:hash,remoteHash:hash,choice:z.enum(['local','published'])}).strict();
+export type SkillResolution=z.infer<typeof skillResolutionSchema>;
 export const principalSchema = z.object({
   id, projectId: id, userId: id, name: z.string().min(1).max(120), role: z.enum(['admin', 'observer', 'agent']),
 });

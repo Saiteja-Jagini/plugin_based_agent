@@ -1,19 +1,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { connectionSchema, id, provisionSchema, defaultPolicy, policySchema } from './contracts.ts';
 import { Store } from './store.ts';
 import { createApp } from './server.ts';
 import { atomicWrite, readJson, requestJson, safePath, trustedUrl } from './util.ts';
 import { connectionAt, hookMain, saveConnection, NotConnected } from './hook.ts';
-import { makeRelease, syncSkills } from './skills.ts';
+import { localSkills, makeRelease, syncSkills } from './skills.ts';
 import { Outbox } from './outbox.ts';
 import { buildNpm, installHooks, packagePlugin, uninstallHooks } from './package.ts';
 import { reviewRepository } from './review.ts';
 import { LumoraClient } from './lumora.ts';
 import { inspectProject } from './project.ts';
+import { diagnose } from './diagnostics.ts';
+import { refreshSkills } from './skill-sync.ts';
 
 const HELP=`Project Governance for Codex, connected through Lumora (Node 24+)
   init --project ID --name NAME --user admin [--data .lumora-agent/service]
@@ -25,6 +26,7 @@ const HELP=`Project Governance for Codex, connected through Lumora (Node 24+)
   publish --root PATH [--skills DIRECTORY] [--version 1.0.0]
   provision --root PATH --user ID --name NAME --role agent|observer|admin
   sync|flush|status|doctor --root PATH
+  skills --root PATH  (list local skill files and overrides; no credential required)
   review --root PATH [--out REPORT.json]
   profile --root PATH  (read-only repository detection, no credential required)
   policy --root PATH [--file POLICY.json]  (read policy, or administrator versioned update)
@@ -49,7 +51,7 @@ export async function main(argv=process.argv.slice(2)) {
   if(command==='hook'){await hookMain();return;}
   if(command==='init') {
     const store=new Store(resolve(v.data??'.lumora-agent/service','control.sqlite'));
-    try{const p=id.parse(v.project);const result=store.bootstrap(p,v.name??p,id.parse(v.user??'admin'));store.publish(result.principal,makeRelease(fileURLToPath(new URL('../skills',import.meta.url)),'2.0.0'));show(result);}finally{store.close();}return;
+    try{const p=id.parse(v.project);const result=store.bootstrap(p,v.name??p,id.parse(v.user??'admin'));store.publish(result.principal,makeRelease(fileURLToPath(new URL('../skills',import.meta.url)),'2.1.0'));show(result);}finally{store.close();}return;
   }
   if(command==='serve') {
     const port=Number(v.port??4318);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid port');
@@ -63,14 +65,20 @@ export async function main(argv=process.argv.slice(2)) {
     const config=connectionSchema.parse({version:1,projectId:v.project,serverUrl:trustedUrl(v.server??'http://127.0.0.1:4318'),tokenEnv:v['token-env']??'LUMORA_AGENT_TOKEN'});
     const token=process.env[config.tokenEnv];if(!token)throw new Error(`Missing ${config.tokenEnv}`);
     const me=await requestJson(`${config.serverUrl}/api/me`,token);if(me.projectId!==config.projectId)throw new Error('Credential belongs to another project');
+    if(me.role==='observer')throw new Error('Capture requires an agent or administrator credential; observers can only read logs');
     config.policy=policySchema.parse(await requestJson(`${config.serverUrl}/api/projects/${encodeURIComponent(config.projectId)}/policy`,token));
-    saveConnection(root,config);show({connected:true,project:config.projectId,root,profile,next:'Install the plugin or project hooks, review /hooks, then start a new Codex session.'});return;
+    saveConnection(root,config);
+    let skills:unknown=null,warning:string|undefined;
+    try{skills=await refreshSkills(root,config,token);}catch{warning='Connected, but initial skill sync failed. Run sync to inspect the error; existing files were preserved.';}
+    show({connected:true,project:config.projectId,root,profile,skills,warning,next:'Keep the service running. Install the plugin or project hooks, review/trust /hooks, then start Codex in this repository with the same credential environment. Send a new prompt and run doctor to check delivery.'});return;
   }
   if(command==='package'){if(!v.out)throw new Error('--out is required');show(await packagePlugin(v.out));return;}
   if(command==='build'){show(await buildNpm());return;}
   if(command==='install'){if(!v.package)throw new Error('--package is required');show(installHooks(root,v.package));return;}
   if(command==='uninstall'){show(uninstallHooks(root));return;}
   if(command==='profile'){show(inspectProject(root));return;}
+  if(command==='skills'){show({root,skills:localSkills(connectionAt(root).root),usage:'Edit the local SKILL.md in your editor. Sync preserves local overrides. Ask Codex to read that file for the task; start a new session for discovery changes.'});return;}
+  if(command==='doctor'||command==='status'){show(await diagnose(root));return;}
   if(command==='review'){
     let policy=defaultPolicy,policySource='generic defaults (unconnected repository)';
     try {
@@ -99,17 +107,11 @@ export async function main(argv=process.argv.slice(2)) {
   const c=await connected(root);
   if(command==='policy'){show(await requestJson(`${c.base}/policy`,c.token,v.file?'PUT':'GET',v.file?policySchema.parse(readJson(resolve(v.file))):undefined));return;}
   if(command==='provision'){show(await requestJson(`${c.base}/principals`,c.token,'POST',provisionSchema.parse({userId:v.user,name:v.name,role:v.role??'agent'})));return;}
-  if(command==='publish'){show(await requestJson(`${c.base}/skills`,c.token,'POST',makeRelease(resolve(v.skills??fileURLToPath(new URL('../skills',import.meta.url))),v.version??'2.0.0')));return;}
-  if(command==='sync') {const response=await requestJson(`${c.base}/skills`,c.token);if(!response.release)throw new Error('No active release');show(syncSkills(c.root,response.release));return;}
+  if(command==='publish'){show(await requestJson(`${c.base}/skills`,c.token,'POST',makeRelease(resolve(v.skills??fileURLToPath(new URL('../skills',import.meta.url))),v.version??'2.1.0')));return;}
+  if(command==='sync') {show(c.config.lumora?syncSkills(c.root,await new LumoraClient(c.config.lumora).skills()):await refreshSkills(c.root,c.config,c.token));return;}
   const queue=new Outbox(safePath(c.root,'.lumora-agent/outbox.sqlite'));
   try {
     if(command==='flush'){show(await queue.flush(c.config,c.token,{force:true,limit:200,budgetMs:30000}));return;}
-    if(command==='status'){show({project:c.config.projectId,server:c.config.serverUrl,queue:queue.status(),skills:existsSync(join(c.root,'.lumora-agent/skills.json'))?readJson(join(c.root,'.lumora-agent/skills.json')):null});return;}
-    if(command==='doctor') {
-      let codex='Unavailable';try{codex=execFileSync(process.platform==='win32'?'cmd.exe':'codex',process.platform==='win32'?['/d','/s','/c','codex.cmd --version']:['--version'],{encoding:'utf8',timeout:5000}).trim();}catch{}
-      let api='unavailable';try{await requestJson(`${c.config.serverUrl}/api/me`,c.token);api='authenticated';}catch{}
-      show({node:process.version,codex,api,project:c.config.projectId,queue:queue.status(),hookConfig:existsSync(join(c.root,'.codex/hooks.json')),nativeTrust:'Open /hooks in Codex to review and trust. This CLI does not bypass trust.',coverage:'Local Codex lifecycle only. Live host invocation and Lumora integration require acceptance testing.'});return;
-    }
     if(command==='bridge') {
       if(!c.config.lumora)throw new Error('Configure the optional lumora adapter in connection.json before bridging');
       const me=await requestJson(`${c.config.serverUrl}/api/me`,c.token),client=new LumoraClient(c.config.lumora);

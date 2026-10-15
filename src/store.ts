@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { canonical, HttpError, sha256 } from './util.ts';
-import { defaultPolicy, eventSchema, policySchema, principalSchema, releaseSchema, type Event, type Principal, type Release } from './contracts.ts';
+import { defaultPolicy, eventSchema, policySchema, principalSchema, releaseSchema, skillEditSchema, skillResolutionSchema, skillSyncReportSchema, slug, type SkillResolution, type Event, type Principal, type Release } from './contracts.ts';
 import { redactEvent } from './redact.ts';
 
 export class Store {
@@ -14,6 +14,8 @@ export class Store {
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
     this.db.exec(readFileSync(new URL('../migrations/001_initial.sql',import.meta.url),'utf8'));
     this.db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES(1,?)').run(new Date().toISOString());
+    this.db.exec(readFileSync(new URL('../migrations/002_skill_sync.sql',import.meta.url),'utf8'));
+    this.db.prepare('INSERT OR IGNORE INTO schema_migrations VALUES(2,?)').run(new Date().toISOString());
   }
   close() {this.db.close();}
   transaction<T>(fn:()=>T):T {
@@ -118,12 +120,67 @@ export class Store {
   }
   publish(p:Principal,input:unknown) {
     this.require(p,p.projectId,['admin']);const release=releaseSchema.parse(input);validateRelease(release);
-    return this.transaction(()=> {
+    return this.transaction(()=>this.writeRelease(p,release));
+  }
+  private writeRelease(p:Principal,release:Release) {
       const existing=this.db.prepare('SELECT payload FROM releases WHERE project_id=? AND version=?').get(p.projectId,release.version);
       if(existing && existing.payload!==canonical(release)) throw new HttpError(409,'Release versions are immutable');
       this.db.prepare('INSERT OR IGNORE INTO releases VALUES(?,?,?,?)').run(p.projectId,release.version,canonical(release),new Date().toISOString());
       this.db.prepare('INSERT INTO active_releases VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET version=excluded.version').run(p.projectId,release.version);
       this.audit(p.projectId,{action:'skills.activated',actor:p.userId,version:release.version,hash:release.hash});return release;
+  }
+  editSkill(p:Principal,name:string,input:unknown) {
+    this.require(p,p.projectId,['admin']);name=slug.parse(name);
+    const edit=skillEditSchema.parse(input);
+    const front=/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]+)$/.exec(edit.content);
+    const declared=front?.[1].match(/^name:\s*["']?([a-z0-9-]+)["']?\s*$/m)?.[1];
+    const description=front?.[1].match(/^description:[ \t]*([^\r\n]+)$/m)?.[1].trim();
+    if(declared!==name||!description||/^(?:"\s*"|'\s*')$/.test(description)||!front?.[2].trim())throw new HttpError(400,'Provide YAML frontmatter with the matching name and a description, followed by instructions.');
+    return this.transaction(()=>{
+      const previous=this.release(p.projectId);
+      if((previous?.hash??null)!==edit.expectedReleaseHash)throw new HttpError(409,'Skills changed since this editor opened. Copy your draft, refresh, and reopen the editor.');
+      const existing=previous?.skills.find(s=>s.slug===name);
+      if(edit.create&&existing)throw new HttpError(409,'A skill with this name already exists.');
+      if(!edit.create&&!existing)throw new HttpError(404,'Skill no longer exists. Refresh the list.');
+      const version=`web-${randomUUID()}`;
+      const skills=[...(previous?.skills??[]).filter(s=>s.slug!==name),{slug:name,version,content:edit.content,hash:sha256(edit.content)}].sort((a,b)=>a.slug.localeCompare(b.slug));
+      const release=releaseSchema.parse({version,skills,hash:sha256(canonical(skills.map(({slug,version,hash})=>({slug,version,hash}))))});
+      validateRelease(release);
+      return this.writeRelease(p,release);
+    });
+  }
+  reportSkills(p:Principal,input:unknown) {
+    this.require(p,p.projectId,['admin','agent']);const report=skillSyncReportSchema.parse(input);
+    if(new Set(report.files.map(f=>f.path)).size!==report.files.length)throw new HttpError(400,'Duplicate sync path');
+    return this.transaction(()=>{
+      const old=this.db.prepare('SELECT id,resolutions FROM skill_syncs WHERE project_id=? AND principal_id=? AND repository_id=?').get(p.projectId,p.id,report.repositoryId);
+      const resolutions:SkillResolution[]=old?JSON.parse(String(old.resolutions)):[];
+      const pending=resolutions.filter(r=>report.files.some(f=>f.status==='conflict'&&f.path===r.path&&f.localHash===r.localHash&&f.remoteHash===r.remoteHash));
+      const reportId=old?String(old.id):randomUUID();
+      this.db.prepare('INSERT INTO skill_syncs VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id,principal_id,repository_id) DO UPDATE SET payload=excluded.payload,resolutions=excluded.resolutions,updated_at=excluded.updated_at').run(reportId,p.projectId,p.id,report.repositoryId,canonical(report),canonical(pending),new Date().toISOString());
+      return {id:reportId};
+    });
+  }
+  skillReports(p:Principal) {
+    return this.db.prepare(`SELECT s.id,s.payload,s.resolutions,s.updated_at,p.user_id FROM skill_syncs s JOIN principals p ON s.principal_id=p.id WHERE s.project_id=? ${p.role==='agent'?'AND s.principal_id=?':''} ORDER BY s.updated_at DESC LIMIT 200`).all(...(p.role==='agent'?[p.projectId,p.id]:[p.projectId])).map(row=>({id:row.id,...JSON.parse(String(row.payload)),resolutions:JSON.parse(String(row.resolutions)),updatedAt:row.updated_at,userId:row.user_id}));
+  }
+  skillResolutions(p:Principal,repositoryId:string):SkillResolution[] {
+    const row=this.db.prepare('SELECT resolutions FROM skill_syncs WHERE project_id=? AND principal_id=? AND repository_id=?').get(p.projectId,p.id,repositoryId);
+    return row?JSON.parse(String(row.resolutions)):[];
+  }
+  resolveSkill(p:Principal,reportId:string,input:unknown) {
+    this.require(p,p.projectId,['admin']);const decision=skillResolutionSchema.parse(input);
+    return this.transaction(()=>{
+      const row=this.db.prepare('SELECT payload,resolutions FROM skill_syncs WHERE id=? AND project_id=?').get(reportId,p.projectId);
+      if(!row)throw new HttpError(404,'Repository sync report not found');
+      const report=skillSyncReportSchema.parse(JSON.parse(String(row.payload)));
+      if(!report.files.some(f=>f.status==='conflict'&&f.path===decision.path&&f.localHash===decision.localHash&&f.remoteHash===decision.remoteHash))throw new HttpError(409,'Conflict changed; refresh before choosing a version.');
+      const published=this.release(p.projectId)?.skills.find(s=>`.agents/skills/${/^(project-|lumora-)/.test(s.slug)?s.slug:`project-${s.slug}`}/SKILL.md`===decision.path);
+      if(published?.hash!==decision.remoteHash)throw new HttpError(409,'Published skill changed. Sync the repository and refresh the conflict.');
+      const resolutions:SkillResolution[]=JSON.parse(String(row.resolutions));
+      this.db.prepare('UPDATE skill_syncs SET resolutions=? WHERE id=?').run(canonical([...resolutions.filter(r=>r.path!==decision.path),decision]),reportId);
+      this.audit(p.projectId,{action:'skill.conflict-resolved',actor:p.userId,reportId,...decision});
+      return {pending:true};
     });
   }
   release(projectId:string) {
@@ -133,6 +190,7 @@ export class Store {
 }
 export function validateRelease(release:Release) {
   if(new Set(release.skills.map(s=>s.slug)).size!==release.skills.length) throw new HttpError(400,'Duplicate skill slug');
+  if(new Set(release.skills.map(s=>/^(project-|lumora-)/.test(s.slug)?s.slug:`project-${s.slug}`)).size!==release.skills.length)throw new HttpError(400,'Skills map to the same repository path');
   for(const skill of release.skills) if(sha256(skill.content)!==skill.hash) throw new HttpError(400,`Skill hash mismatch: ${skill.slug}`);
   if(sha256(canonical(release.skills.map(({slug,version,hash})=>({slug,version,hash}))))!==release.hash) throw new HttpError(400,'Release hash mismatch');
 }

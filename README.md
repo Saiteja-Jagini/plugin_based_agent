@@ -1,5 +1,7 @@
 # Lumora Agent Governance
 
+For the complete setup, editable local skills, test-writing prompts and log troubleshooting, see [Local project workflow](docs/LOCAL_PROJECT_WORKFLOW.md).
+
 A separate Codex plugin and local management product for **prompt logs, user/session visibility, approved skill refresh, and the connected repository's own project rules**. **Lumora is the management platform. The target can be any local project, regardless of language or framework.** One installed plugin serves independent project connections.
 
 ![Management console with synthetic test activity](docs/screenshots/overview.png)
@@ -47,14 +49,14 @@ The command authenticates to the control plane and writes `.lumora-agent/connect
 
 ## 3. Install the Codex plugin
 
-The ready-built package is **`dist/lumora-governance-0.2.0`**. It includes root `plugin.json`, a compatibility manifest, three skills, `hooks/hooks.json`, compiled JavaScript and its pinned Zod runtime dependency. It does not download npm packages on every prompt.
+The ready-built package is **`dist/lumora-governance-0.4.0`**. It includes root `plugin.json`, a compatibility manifest, three skills, `hooks/hooks.json`, compiled JavaScript and its pinned Zod runtime dependency. It does not download npm packages on every prompt.
 
 Use the local marketplace commands in [Install once, connect each repository](docs/INSTALL_ONCE.md). Set `LUMORA_AGENT_TOKEN` in the environment inherited by Codex and connect the intended repository as above. Restart Codex if necessary, open `/hooks`, and review/trust the hook definitions. The product never bypasses native trust.
 
 For a project-local pilot, the CLI can instead install equivalent hook registrations:
 
 ```powershell
-node src/cli.ts install --root "<pilot repository path>" --package "D:\Downloads\plugin_based_agent\dist\lumora-governance-0.2.0"
+node src/cli.ts install --root "<pilot repository path>" --package "D:\Downloads\plugin_based_agent\dist\lumora-governance-0.4.0"
 ```
 
 **Choose one installation route.** Enabling both the packaged plugin hooks and project-local hooks will double-capture events. Existing Lumora prompt hooks also need an explicit ownership decision before a live rollout; the installer warns and preserves them. The installer preserves foreign hook groups and backs up the original JSON. It refuses invalid existing configuration and linked paths.
@@ -84,7 +86,7 @@ node src/cli.ts flush --root "<pilot repository path>"
 node src/cli.ts sync --root "<pilot repository path>"
 ```
 
-- **SessionStart** downloads the latest policy and approved skills. Hash validation precedes writes. Modified/unmanaged skills are retained and a warning is reported. Disk refresh does not prove the active model reloaded skill discovery; check in a new session.
+- **SessionStart** downloads the latest policy and approved skills. **UserPromptSubmit** also refreshes skills before the prompt continues. Hash validation precedes writes. Modified/unmanaged skills remain active as local overrides while other skills refresh. Disk refresh does not prove the active model reloaded skill discovery; check in a new session.
 - **UserPromptSubmit** redacts likely credentials, queues the prompt locally, and attempts delivery. Network failure leaves it queued. Retry retains the same event ID. Events are bound to server/project/credential identity; another credential cannot flush them.
 - **PreToolUse** checks recognized DB resets and optionally DB push commands, explicit patch/edit paths, governance/secret-file edits and configured source-rule candidates. Enforce mode returns a native denial for error findings; observe mode records them. Shell text matching is not an interpreter or security sandbox.
 - **PostToolUse** records the tool observation. Explicit exit codes can establish command success/failure; unknown tool output remains `unknown`. It never becomes test success automatically.
@@ -97,6 +99,8 @@ If a sync lock remains after a process crash, first verify no sync is running. I
 
 ## 5. Project-aware skills and review
 
+Project administrators can use **Create skill** and **Edit skill** in the dashboard. Saves publish immutable releases with stale-editor protection. Updated, trusted hooks synchronize before the next prompt; repository reports show pending updates and conflicts. **Keep local** or **Use published** resolves a conflict on the next sync; replacing a local file creates a backup first. See the [workflow guide](docs/LOCAL_PROJECT_WORKFLOW.md#4-create-and-edit-skills-in-the-dashboard).
+
 | Skill | Purpose |
 |---|---|
 | `project-review` | Review defects against this repository's documented architecture and requirements |
@@ -106,10 +110,10 @@ If a sync lock remains after a process crash, first verify no sync is running. I
 Administrators publish immutable releases using a connected administrator credential:
 
 ```powershell
-node src/cli.ts publish --root "<pilot repository path>" --skills skills --version 2.0.0
+node src/cli.ts publish --root "<pilot repository path>" --skills skills --version 2.1.0
 ```
 
-Republishing different content under the same release version is rejected. Re-publishing the exact older release activates a rollback. Each session refreshes from the active catalog. Local skill directories are namespaced under `.agents/skills/project-*` (legacy `lumora-*` releases remain readable) and only unchanged, receipt-owned stale files are removed.
+Republishing different content under the same release version is rejected. Re-publishing the exact older release activates a rollback. Each session refreshes from the active catalog. Edit each repository's local SKILL.md with your editor; `skills --root PATH` lists overrides. Prompt hooks tell Codex to read the current local copy when using a skill. Local skill directories are namespaced under `.agents/skills/project-*` (legacy `lumora-*` releases remain readable) and only unchanged, receipt-owned stale files are removed.
 
 Read-only static review:
 

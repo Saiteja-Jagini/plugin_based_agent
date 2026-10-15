@@ -5,6 +5,8 @@ description: Plan, write and run tests using the current repository's own framew
 
 # Test the current project
 
+Before applying a bundled copy of this skill, check the connected repository's `.agents/skills/project-testing/SKILL.md`. If a distinct local copy exists, read and use its current instructions for this repository. Local edits survive sync. Do not recursively reload the same file; user instructions and higher-priority rules still apply.
+
 1. Read applicable `AGENTS.md`, manifests, test configuration, existing tests and CI workflows. Identify package/workspace boundaries, tool versions, runners, setup requirements and the behavior under change. Lumora manages this connection; its implementation stack does not dictate the target's tests.
 2. Reuse this project's test framework and conventions. If no runner exists, explain the gap and propose a suitable setup based on the project before introducing dependencies. Do not invent npm, pytest or other commands based solely on language detection.
 3. Map requirements and likely defects to meaningful tests: normal behavior, boundary inputs, error paths, state changes and relevant authorization/isolation. Scope testing to the change. Avoid tests that merely restate implementation details.

@@ -9,7 +9,7 @@ import { defaultPolicy, eventSchema, hookSchema, connectionSchema } from '../src
 import { redact } from '../src/redact.ts';
 import { evaluate, reviewSource } from '../src/policy.ts';
 import { canonical, sha256, HttpError } from '../src/util.ts';
-import { makeRelease, syncSkills } from '../src/skills.ts';
+import { localSkills, makeRelease, syncSkills } from '../src/skills.ts';
 import { installHooks, uninstallHooks } from '../src/package.ts';
 
 const temp=()=>mkdtempSync(join(tmpdir(),'lumora-test-'));
@@ -75,10 +75,27 @@ test('skill releases validate all hashes and preserve tampered or unmanaged file
   assert.equal(syncSkills(root,release).changed,0);
   const bad=structuredClone(release);bad.skills[0].content+='tampered';assert.throws(()=>syncSkills(root,bad),/hash mismatch/);
   const file=join(root,'.agents','skills',release.skills[0].slug,'SKILL.md');writeFileSync(file,'user edit');
-  assert.throws(()=>syncSkills(root,release),/modified/);assert.equal(readFileSync(file,'utf8'),'user edit');
+  assert.equal(syncSkills(root,release).preserved.length,1);assert.equal(readFileSync(file,'utf8'),'user edit');
+  assert.equal(localSkills(root).find(s=>s.absolute===file)?.status,'local override');
   const other=temp();mkdirSync(join(other,'.agents','skills',release.skills[0].slug),{recursive:true});writeFileSync(join(other,'.agents','skills',release.skills[0].slug,'SKILL.md'),'own skill');
-  assert.throws(()=>syncSkills(other,release),/Unmanaged/);
-  const removed={version:'2',skills:[],hash:sha256(canonical([]))};assert.throws(()=>syncSkills(root,removed),/Modified stale/);
+  assert.equal(syncSkills(other,release).preserved.length,1);
+  const removed={version:'2',skills:[],hash:sha256(canonical([]))};assert.equal(syncSkills(root,removed).preserved.length,1);
+  assert.equal(readFileSync(file,'utf8'),'user edit');assert.equal(localSkills(root).length,1);
+});
+
+test('local overrides survive repeated upstream upgrades while untouched skills update',()=>{
+  const root=temp(),release=makeRelease('skills','1');syncSkills(root,release);
+  const file=join(root,'.agents/skills/project-testing/SKILL.md'),custom=readFileSync(file,'utf8')+'\nUse the repository fixtures and cover expired sessions.';
+  writeFileSync(file,custom);
+  const upgraded=makeRelease('skills','2');
+  for(const skill of upgraded.skills){skill.content+='\nUpdated default';skill.hash=sha256(skill.content);}
+  upgraded.hash=sha256(canonical(upgraded.skills.map(({slug,version,hash})=>({slug,version,hash}))));
+  assert.equal(syncSkills(root,upgraded).preserved.length,1);
+  assert.equal(syncSkills(root,upgraded).changed,0);
+  assert.equal(readFileSync(file,'utf8'),custom);
+  assert.ok(readFileSync(join(root,'.agents/skills/project-review/SKILL.md'),'utf8').endsWith('Updated default'));
+  const other=temp();syncSkills(other,upgraded);
+  assert.ok(!readFileSync(join(other,'.agents/skills/project-testing/SKILL.md'),'utf8').includes('cover expired sessions'));
 });
 test('release versions cannot silently change, while rollback activates known content',()=>{
   const s=new Store(':memory:'),a=s.bootstrap('p','P','a'),one=makeRelease('skills','1'),two=makeRelease('skills','2');

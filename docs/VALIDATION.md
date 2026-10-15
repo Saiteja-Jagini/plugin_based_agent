@@ -1,3 +1,26 @@
+# Validation record ? 2026-10-13 (0.4.0)
+
+- `npm.cmd run verify`: strict TypeScript checking and **29 Node tests passed**. Coverage includes administrator-only skill creation/editing, matching frontmatter, immutable releases, stale-editor conflicts, preservation of other skills, next-prompt synchronization without SessionStart, conflict choices pinned to both file hashes, backup before replacement, credential/project isolation and offline capture while retaining local skills.
+- `npm.cmd run test:ui`: **2 headless Edge scenarios passed**. The new scenario creates and edits a skill through the dashboard, invokes a prompt hook and verifies the repository file, resolves both conflict choices, verifies a stale save retains the draft, checks agent controls are hidden, and checks mobile overflow. No page errors. Desktop/mobile screenshots visually inspected under `.lumora-agent/reports/skill-*.png`.
+- `npm.cmd run build` and versioned packaging succeeded. Plugin 0.4.0 was installed, and Coznt's existing project-hook adapter was updated to that runtime with a configuration backup.
+- The running management service was restarted against the same `.lumora-agent/service` directory after a consistent SQLite backup. `/health` reports 0.4.0. Read-only comparison with the backup confirmed existing project, credential, release and event rows were preserved; migration 2 adds skill synchronization reports and pending decisions.
+- Native Codex `hooks/list` discovers all six Coznt project hooks with the 0.4.0 runtime, no discovery errors and trust status **modified**. The user must review/trust the changed definitions in `/hooks`; this update does not bypass host trust or claim a real subsequent interactive prompt has run.
+- Dashboard saves publish immediately; repository files update on the next trusted prompt/session hook or explicit sync. Repository status is the last received report and can be stale while offline. Local instruction bodies are not uploaded. The external Lumora adapter, when configured, remains authoritative for its catalog.
+
+The following records describe earlier versions.
+
+# Validation record ? 2026-10-13 (0.3.0)
+
+- `npm.cmd run verify`: strict TypeScript checking and **24 Node tests passed**. Added coverage for local overrides across repeated releases, updating untouched skills, independent repositories, current local skill context on prompts, missing credentials, observer/revoked/wrong-project identities, initial connection sync and a real packaged shell hook posting redacted prompts to the HTTP log API.
+- `npm.cmd run test:ui`: **1 headless Edge scenario passed**, including a new prompt delivered via `handleHook` appearing through automatic polling, redaction, filters, published skill content, test-writing guidance and mobile overflow. No browser page errors. Screenshots visually inspected.
+- All three edited skills passed `quick_validate.py`.
+- `npm.cmd run build` and packaging produced the 0.3.0 runtime. The compiled CLI reported Coznt as unconnected. Host `codex plugin add` and `plugin list` confirmed 0.3.0 installed and enabled; hook trust was not bypassed. Host loopback checks independently confirmed no reachable service on 4318.
+- `doctor --root D:\Downloads\coznt` reported no connection. Loopback health check found no service listening at port 4318. Codex CLI 0.158.0 has plugins/hooks enabled, but this does not establish hook trust or native invocation.
+- The actual Coznt application and its connection were not changed. Native capture in a new interactive Codex CLI session remains an acceptance step after the user supplies the project credential, connects the repository and trusts hooks. Packaged subprocess and browser tests do not claim that native host acceptance.
+- The dashboard shows published skill defaults. Repository edits stay local and are listed by `skills --root`; hook context directs the agent to read them. An LLM's compliance with arbitrary custom instructions is not a deterministic guarantee.
+
+The following is the historical 0.2.0 validation record.
+
 ﻿# Validation record â€” 2026-10-12
 
 ## Confirmed locally

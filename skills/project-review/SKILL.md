@@ -5,6 +5,8 @@ description: Review changes in the current local repository for defects, violati
 
 # Review the connected project
 
+Before applying a bundled copy of this skill, check the connected repository's `.agents/skills/project-review/SKILL.md`. If a distinct local copy exists, read and use its current instructions for this repository. Local edits survive sync. Do not recursively reload the same file; user instructions and higher-priority rules still apply.
+
 1. Establish the repository root and current diff. Read applicable `AGENTS.md`, architecture documentation, manifests and nearby code. Preserve user changes. Lumora is the platform managing the connection; the target may be any project.
 2. Identify this project's actual boundaries, data models, authentication, persistence and external calls. Trace changed behavior through callers and tests. Do not assume Angular, Next.js, Zod, Drizzle, a central AI function or a specific migration directory.
 3. Apply documented project requirements. Platform `sourceRules` are literal-text, path-prefix review hints, not an AST analysis or runtime proof. Do not infer a ban merely from a stack or an interface declaration. Cite the source of any claimed architecture requirement.
